@@ -1,0 +1,12 @@
+---
+title: "About"
+output: 
+  html_document:
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This website is just a sandbox for larger projects. Just testing somethings. 
