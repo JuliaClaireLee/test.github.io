@@ -1,0 +1,15 @@
+name: "Test Enviroment"
+navbar:
+  title: "TEST"
+  left:
+    - text: "About"
+      href: About.html
+    - text: "Projects"
+      icon: fa-gear
+      menu:
+        - text: "Code Bot"   
+        - href: test.html 
+        - text: "Game"
+        - href: GameTest.html
+
+output_dir: "."

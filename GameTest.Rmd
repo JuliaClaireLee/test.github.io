@@ -1,0 +1,44 @@
+---
+output: 
+  html_document:
+    theme: united
+---
+
+<canvas id="game" width="320" height="480"></canvas>
+
+```{js, echo=FALSE}
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d");
+
+let birdY = 150;
+let gravity = 0.5;
+let velocity = 0;
+let pipeX = 320;
+let pipeGap = 100;
+let pipeHeight = 150;
+
+window.addEventListener("keydown", () => velocity = -8);
+cvs.addEventListener("mousedown", () => velocity = -8);
+
+function draw() {
+  velocity += gravity;
+  birdY += velocity;
+  pipeX -= 2;
+  if (pipeX < -50) pipeX = 320;
+
+  ctx.fillStyle = "#70c5ce";
+  ctx.fillRect(0, 0, 320, 480);
+
+  ctx.fillStyle = "yellow";
+  ctx.fillRect(50, birdY, 20, 20);
+
+  ctx.fillStyle = "green";
+  ctx.fillRect(pipeX, 0, 50, pipeHeight);
+  ctx.fillRect(pipeX, pipeHeight + pipeGap, 50, 480);
+
+  requestAnimationFrame(draw);
+}
+draw();
+```
+
+
