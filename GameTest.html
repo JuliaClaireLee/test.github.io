@@ -282,41 +282,1571 @@ $(document).ready(function () {
 </div>
 
 
-<canvas id="game" width="320" height="480">
-</canvas>
 <script>
-const cvs = document.getElementById("game");
-const ctx = cvs.getContext("2d");
+// Ghost Escape -- you are a ghost! Escape the haunted maze before the vampire bats drink all the blood, without touching a bat.
+// Built on the CSC212 P2 starter code (converted from Java to JavaScript).
 
-let birdY = 150;
-let gravity = 0.5;
-let velocity = 0;
-let pipeX = 320;
-let pipeGap = 100;
-let pipeHeight = 150;
+// ===================== gfx =====================
 
-window.addEventListener("keydown", () => velocity = -8);
-cvs.addEventListener("mousedown", () => velocity = -8);
+// gfx.js
+// Small stand-ins for the Java libraries the original project used
+// (java.awt.Color, Graphics2D, shapes, java.util.Random, and the
+// me.jjfoley.gfx GFX / IntPoint / TextBox classes), so the converted
+// game code can stay as close to the Java as possible.
 
-function draw() {
-  velocity += gravity;
-  birdY += velocity;
-  pipeX -= 2;
-  if (pipeX < -50) pipeX = 320;
-
-  ctx.fillStyle = "#70c5ce";
-  ctx.fillRect(0, 0, 320, 480);
-
-  ctx.fillStyle = "yellow";
-  ctx.fillRect(50, birdY, 20, 20);
-
-  ctx.fillStyle = "green";
-  ctx.fillRect(pipeX, 0, 50, pipeHeight);
-  ctx.fillRect(pipeX, pipeHeight + pipeGap, 50, 480);
-
-  requestAnimationFrame(draw);
+/** java.awt.Color */
+class Color {
+    constructor(r, g, b, a = 255) {
+        this.r = r;
+        this.g = g;
+        this.b = b;
+        this.a = a;
+    }
+    /** Java's new Color(float r, float g, float b, float a) */
+    static fromFloats(r, g, b, a = 1) {
+        return new Color(
+            Math.trunc(r * 255 + 0.5),
+            Math.trunc(g * 255 + 0.5),
+            Math.trunc(b * 255 + 0.5),
+            Math.trunc(a * 255 + 0.5));
+    }
+    /** Same as Java: multiply each channel by 0.7, keep alpha. */
+    darker() {
+        const FACTOR = 0.7;
+        return new Color(
+            Math.max(Math.trunc(this.r * FACTOR), 0),
+            Math.max(Math.trunc(this.g * FACTOR), 0),
+            Math.max(Math.trunc(this.b * FACTOR), 0),
+            this.a);
+    }
+    toCSS() {
+        return `rgba(${this.r},${this.g},${this.b},${this.a / 255})`;
+    }
 }
-draw();
+Color.red = Color.RED = new Color(255, 0, 0);
+Color.green = Color.GREEN = new Color(0, 255, 0);
+Color.yellow = Color.YELLOW = new Color(255, 255, 0);
+Color.white = Color.WHITE = new Color(255, 255, 255);
+Color.darkGray = Color.DARK_GRAY = new Color(64, 64, 64);
+Color.blue = Color.BLUE = new Color(0, 0, 255);
+Color.magenta = Color.MAGENTA = new Color(255, 0, 255);
+Color.cyan = Color.CYAN = new Color(0, 255, 255);
+Color.pink = Color.PINK = new Color(255, 175, 175);
+Color.orange = Color.ORANGE = new Color(255, 200, 0);
+Color.black = Color.BLACK = new Color(0, 0, 0);
+
+/** java.awt.geom.Ellipse2D.Double */
+class Ellipse2D {
+    constructor(x, y, w, h) {
+        this.x = x; this.y = y; this.w = w; this.h = h;
+    }
+    path(ctx) {
+        ctx.ellipse(this.x + this.w / 2, this.y + this.h / 2, this.w / 2, this.h / 2, 0, 0, Math.PI * 2);
+    }
+}
+
+/** java.awt.geom.Rectangle2D.Double */
+class Rectangle2D {
+    constructor(x, y, w, h) {
+        this.x = x; this.y = y; this.w = w; this.h = h;
+    }
+    getCenterX() { return this.x + this.w / 2; }
+    getCenterY() { return this.y + this.h / 2; }
+    path(ctx) {
+        ctx.rect(this.x, this.y, this.w, this.h);
+    }
+}
+
+/** java.awt.geom.RoundRectangle2D.Double */
+class RoundRectangle2D {
+    constructor(x, y, w, h, arcW, arcH) {
+        this.x = x; this.y = y; this.w = w; this.h = h;
+        this.arcW = arcW; this.arcH = arcH;
+    }
+    path(ctx) {
+        ctx.roundRect(this.x, this.y, this.w, this.h, [{ x: this.arcW / 2, y: this.arcH / 2 }]);
+    }
+}
+
+/** java.awt.Polygon */
+class Polygon {
+    constructor() {
+        this.points = [];
+    }
+    addPoint(x, y) {
+        this.points.push([x, y]);
+    }
+    path(ctx) {
+        this.points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+    }
+}
+
+/**
+ * java.awt.Graphics2D, on top of a canvas context.
+ * Like Java, create() gives an independent copy, so transforms on the copy
+ * never leak back to the original (even if dispose() is never called).
+ */
+class Graphics2D {
+    constructor(ctx, transform = new DOMMatrix(), color = Color.black, font = null) {
+        this.ctx = ctx;
+        this.transform = transform;
+        this.color = color;
+        this.font = font;
+    }
+    create() {
+        return new Graphics2D(this.ctx, DOMMatrix.fromMatrix(this.transform), this.color, this.font);
+    }
+    dispose() {}
+    scale(sx, sy) { this.transform.scaleSelf(sx, sy); }
+    translate(x, y) { this.transform.translateSelf(x, y); }
+    setColor(c) { this.color = c; }
+    setFont(f) { this.font = f; }
+    _apply() {
+        const t = this.transform;
+        this.ctx.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
+        this.ctx.fillStyle = this.color.toCSS();
+        this.ctx.strokeStyle = this.color.toCSS();
+        this.ctx.lineWidth = 1;
+    }
+    fill(shape) {
+        this._apply();
+        this.ctx.beginPath();
+        shape.path(this.ctx);
+        this.ctx.fill();
+    }
+    draw(shape) {
+        this._apply();
+        this.ctx.beginPath();
+        shape.path(this.ctx);
+        this.ctx.stroke();
+    }
+    fillRect(x, y, w, h) { this.fill(new Rectangle2D(x, y, w, h)); }
+    drawRect(x, y, w, h) { this.draw(new Rectangle2D(x, y, w, h)); }
+    fillPolygon(p) { this.fill(p); }
+    drawCenteredString(str, cx, cy) {
+        this._apply();
+        this.ctx.font = this.font || "16px sans-serif";
+        this.ctx.textAlign = "center";
+        this.ctx.textBaseline = "middle";
+        this.ctx.fillText(str, cx, cy);
+    }
+}
+
+/** java.util.Random / ThreadLocalRandom */
+class Random {
+    nextInt(n) { return Math.floor(Math.random() * n); }
+    nextDouble() { return Math.random(); }
+    nextBoolean() { return Math.random() < 0.5; }
+}
+const ThreadLocalRandom = {
+    _shared: new Random(),
+    current() { return this._shared; }
+};
+
+/** me.jjfoley.gfx.IntPoint */
+class IntPoint {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+/** java.awt.event.KeyEvent key codes */
+const KeyEvent = {
+    VK_W: 87, VK_A: 65, VK_S: 83, VK_D: 68,
+    VK_UP: 38, VK_DOWN: 40, VK_LEFT: 37, VK_RIGHT: 39,
+    VK_SPACE: 32
+};
+
+/** me.jjfoley.gfx.TextBox */
+class TextBox {
+    constructor(str) {
+        this.str = str;
+        this.color = Color.black;
+        this.bold = false;
+        this.fontSize = 16;
+        this.rect = null;
+    }
+    setString(str) { this.str = str; }
+    setFont(font) { this.bold = (font === TextBox.BOLD_FONT); }
+    setFontSize(size) { this.fontSize = size; }
+    centerInside(rect) { this.rect = rect; }
+    draw(g) {
+        const tg = g.create();
+        tg.setColor(this.color);
+        tg.setFont((this.bold ? "bold " : "") + this.fontSize + "px sans-serif");
+        tg.drawCenteredString(this.str, this.rect.getCenterX(), this.rect.getCenterY());
+        tg.dispose();
+    }
+}
+TextBox.BOLD_FONT = "BOLD_FONT";
+TextBox.PLAIN_FONT = "PLAIN_FONT";
+
+/** me.jjfoley.gfx.GFX: a window with a draw/update loop, keyboard and mouse. */
+class GFX {
+    constructor(w, h) {
+        this._width = w;
+        this._height = h;
+        this._keys = new Set();
+        this._click = null;
+        this._mouse = null;
+
+        this.canvas = document.createElement("canvas");
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.canvas.tabIndex = 0;
+        // Dynamic size: the game draws at w x h, but the browser shrinks it to fit
+        // the page width and 75% of the window height (keeping its shape), so you
+        // never have to scroll to see the bottom of the board.
+        this.canvas.style.display = "block";
+        this.canvas.style.margin = "0 auto";
+        this.canvas.style.width = "auto";
+        this.canvas.style.height = "auto";
+        this.canvas.style.maxWidth = "100%";
+        this.canvas.style.maxHeight = "75vh";
+        document.body.appendChild(this.canvas);
+        this.ctx = this.canvas.getContext("2d");
+
+        // Keys currently held down (for hold-to-move).
+        this._held = new Set();
+        window.addEventListener("keydown", (e) => {
+            if ([32, 37, 38, 39, 40].includes(e.keyCode)) e.preventDefault();
+            // Ignore the automatic repeats you get from holding a key down.
+            if (!e.repeat) this._keys.add(e.keyCode);
+            this._held.add(e.keyCode);
+        });
+        window.addEventListener("keyup", (e) => { this._held.delete(e.keyCode); });
+        window.addEventListener("blur", () => { this._held.clear(); });
+        this.canvas.addEventListener("mousemove", (e) => {
+            this._mouse = this._toGameCoords(e);
+        });
+        this.canvas.addEventListener("mouseleave", () => { this._mouse = null; });
+        this.canvas.addEventListener("mousedown", (e) => {
+            this._click = this._toGameCoords(e);
+        });
+    }
+    /** The canvas may be shown smaller than it draws, so scale the mouse position back up. */
+    _toGameCoords(e) {
+        const scaleX = this._width / this.canvas.clientWidth;
+        const scaleY = this._height / this.canvas.clientHeight;
+        return new IntPoint(Math.trunc(e.offsetX * scaleX), Math.trunc(e.offsetY * scaleY));
+    }
+    getWidth() { return this._width; }
+    getHeight() { return this._height; }
+    getMouseLocation() { return this._mouse; }
+    /** True while this key is being held down. */
+    isKeyDown(code) { return this._held.has(code); }
+    /** True (once) if this key was pressed since the last check. */
+    processKey(code) {
+        if (this._keys.has(code)) {
+            this._keys.delete(code);
+            return true;
+        }
+        return false;
+    }
+    /** The last click (once), or null. */
+    processClick() {
+        const c = this._click;
+        this._click = null;
+        return c;
+    }
+    start() {
+        let last = performance.now();
+        const loop = (now) => {
+            this.update((now - last) / 1000);
+            last = now;
+            this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+            this.draw(new Graphics2D(this.ctx));
+            requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+    }
+}
+
+// ===================== WorldObject =====================
+
+/**
+ * A WorldObject is an abstract "item" in the game.
+ * Ghost, the player, rocks, and the Pumpkin are all WorldObject subclasses.
+ *
+ * All movement is defined in this class.
+ *
+ * @author jfoley
+ */
+class WorldObject {
+    /**
+     * Random in case you want random numbers!
+     */
+    rand = ThreadLocalRandom.current();
+    /**
+     * Where am I? x-tile in the grid.
+     */
+    #x = 0;
+    /**
+     * Where am I? y-tile in the grid.
+     */
+    #y = 0;
+    /**
+     * What world do I belong to?
+     */
+    world;
+    /**
+     * How many ghost do we anticipate having? This is used to make them follow you.
+     */
+    static NUM_RECENT_POSITIONS = 64;
+    /**
+     * Here, we use a special kind of list that makes it easy to add to the front
+     * and remove from the back, so we keep up to NUM_RECENT_POSITIONS locations for every ghost.
+     */
+    recentPositions;
+
+    /**
+     * Create a new WorldObject -- this is the call to super(world) in Ghost.
+     *
+     * @param world the world filled with other objects.
+     */
+    constructor(world) {
+        if (new.target === WorldObject) {
+            throw new TypeError("WorldObject is abstract");
+        }
+        this.world = world;
+        this.recentPositions = [];
+    }
+
+    /**
+     * Remove this WorldObject from its world.
+     */
+    remove() {
+        this.world.remove(this);
+        this.world = null;
+    }
+
+    /**
+     * Move this object to a given position (ignoring rules).
+     *
+     * Called as setPosition(x, y) or setPosition(pt) where pt is an IntPoint.
+     */
+    setPosition(x, y) {
+        if (y === undefined) {
+            const pt = x;
+            this.setPosition(pt.x, pt.y);
+            return;
+        }
+        this.#x = x;
+        this.#y = y;
+        this.#updatePosition();
+    }
+
+    /**
+     * Private method to keep track of this object's position history. Used to make
+     * Ghost follow the Player.
+     */
+    #updatePosition() {
+        // Add to front.
+        this.recentPositions.unshift(new IntPoint(this.#x, this.#y));
+        if (this.recentPositions.length > WorldObject.NUM_RECENT_POSITIONS) {
+            // Remove from back.
+            this.recentPositions.pop();
+        }
+
+    }
+
+    /**
+     * Move this object up if possible.
+     *
+     * @return true if it moved!
+     */
+    moveUp() {
+        if (this.world.canSwim(this, this.#x, this.#y - 1)) {
+            this.#y -= 1;
+            this.#updatePosition();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Is this a ghost?
+     *
+     * @return true if this is a Ghost.
+     */
+    isGhost() {
+        return this instanceof Ghost;
+    }
+
+    /**
+     * Is this the player?
+     *
+     * @return true if this is a Ghost that is the player.
+     */
+    isPlayer() {
+        return this.isGhost() && this.player;
+    }
+
+    /**
+     * Move this object down if possible.
+     *
+     * @return true if it moved!
+     */
+    moveDown() {
+        if (this.world.canSwim(this, this.#x, this.#y + 1)) {
+            this.#y += 1;
+            this.#updatePosition();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Move this object left if possible.
+     *
+     * @return true if it moved!
+     */
+    moveLeft() {
+        if (this.world.canSwim(this, this.#x - 1, this.#y)) {
+            this.#x -= 1;
+            this.#updatePosition();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Move this object right if possible.
+     *
+     * @return true if it moved!
+     */
+    moveRight() {
+        if (this.world.canSwim(this, this.#x + 1, this.#y)) {
+            this.#x += 1;
+            this.#updatePosition();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Move randomly!
+     */
+    moveRandomly() {
+        const x = this.#x;
+        const y = this.#y;
+        // Can we move right, left, down, or up?
+        const canMove =
+                this.world.canSwim(this, x+1, y) ||
+                this.world.canSwim(this, x-1, y) ||
+                this.world.canSwim(this, x, y+1) ||
+                this.world.canSwim(this, x, y-1);
+
+        // If not, don't try to pick one.
+        if (!canMove) {
+            // "this" is stuck, and can't go anywhere!
+            return;
+        }
+
+        // Pick one at random (that works):
+        while (true) {
+
+            // Choose a direction at random.
+            const direction = ThreadLocalRandom.current().nextInt(4);
+
+            let success = false;
+            if (direction == 0) {
+                success = this.moveUp();
+            } else if (direction == 1) {
+                success = this.moveDown();
+            } else if (direction == 2) {
+                success = this.moveRight();
+            } else {
+                success = this.moveLeft();
+            }
+
+            // Did the direction we picked work?
+            if (success) {
+                // If so, exit this method now.
+                break;
+            }
+            // Otherwise go pick another.
+        }
+    }
+
+    /**
+     * Part of my position!
+     *
+     * @return the x-coordinate.
+     */
+    getX() {
+        return this.#x;
+    }
+
+    /**
+     * Part of my position!
+     *
+     * @return the y-coordinate.
+     */
+    getY() {
+        return this.#y;
+    }
+
+    /**
+     * I'm a world object! I exist in the world somewhere! This method tests that!
+     */
+    checkFindMyself() {
+        if (!this.findSameCell().includes(this)) {
+            throw new Error("Couldn't find myself! Check World.register still works!");
+        }
+    }
+
+    /**
+     * Find all the items at the same position as me!
+     *
+     * @return a list of WorldObject.
+     */
+    findSameCell() {
+        return this.world.find(this.#x, this.#y);
+    }
+
+    /**
+     * Check whether this object is in the same spot as another.
+     *
+     * @param other the other WorldObject.
+     * @return true if their x and y coordinates are the same.
+     */
+    inSameSpot(other) {
+        return this.#x == other.getX() && this.#y == other.getY();
+    }
+
+    /**
+     * Draw this WorldObject!
+     *
+     * Abstract so that Ghost and other subclasses MUST implement.
+     *
+     * @param g Graphics2D API.
+     */
+    draw(g) {
+        throw new Error("abstract method draw() not implemented");
+    }
+
+    /**
+     * Step this WorldObject!
+     *
+     * Abstract so that Ghost and Rock, etc. MUST implement!
+     */
+    step() {
+        throw new Error("abstract method step() not implemented");
+    }
+}
+
+// ===================== Ghost =====================
+
+/**
+ * Most Ghost behavior lives up in WorldObject (a Ghost just looks special!).
+ * Or it is in PlayGhost, where the missing/found and player ghost all act different!
+ *
+ * @author jfoley
+ */
+class Ghost extends WorldObject {
+    /**
+     * A ghost is only special because of its color now!
+     */
+    static COLORS = [
+            Color.red,
+            Color.green,
+            Color.black,
+            Color.white,
+            Color.darkGray,
+            Color.blue,
+            Color.magenta,
+            Color.CYAN,
+            Color.PINK,
+            Color.ORANGE
+            // TODO: (lab) Add more colors.
+            // TODO: (P2) Maybe make a special ghost that is more points?
+    ];
+    /**
+     * This is an index into the {@link #COLORS} array.
+     */
+    color;
+    /**
+     * Whether or not this is the player;
+     */
+    player = false;
+    r = new Random();
+    fastScared = this.r.nextBoolean();
+    /**
+     * Called only on the Ghost that is the player!
+     */
+    markAsPlayer() {
+        this.player = true;
+    }
+
+
+    /**
+     * A Ghost knows what World it belongs to, because all WorldObjects do.
+     * @param color Color by number.
+     * @param world The world itself.
+     */
+    constructor(color, world) {
+        super(world);
+        this.color = color;
+    }
+
+    /**
+     * What actual color is this ghost? We store an index, so get it here.
+     * @return the Color object from our array.
+     */
+    getColor() {
+        return Ghost.COLORS[this.color];
+    }
+
+    /**
+     * Animate our ghost by facing left and then right over time.
+     */
+    #dt = 0;
+
+    /**
+     * Go ahead and ignore this method if you're not into graphics.
+     * We use "dt" as a trick to make the ghost change directions every second or so; this makes them feel a little more alive.
+     */
+    draw(g) {
+        this.#dt += 1;
+        if (this.#dt > 100) {
+            this.#dt = 0;
+        }
+        const circle = new Ellipse2D(-0.6, -0.6, 1.2, 1.2);
+
+        // The ghost body: a round dome on top, straight sides, and a wavy bottom edge.
+        const body = new Polygon();
+        for (let i = 0; i <= 12; i++) {
+            const angle = Math.PI + Math.PI * i / 12;
+            body.addPoint(.32 * Math.cos(angle), -.1 + .32 * Math.sin(angle));
+        }
+        body.addPoint(.32, .32);
+        body.addPoint(.21, .24);
+        body.addPoint(.11, .34);
+        body.addPoint(0, .24);
+        body.addPoint(-.11, .34);
+        body.addPoint(-.21, .24);
+        body.addPoint(-.32, .32);
+
+        // A soft shadow under the ghost so it looks like it's floating.
+        const shadow = new Ellipse2D(-.25, .36, .5, .1);
+        const eyeL = new Ellipse2D(-.21, -.2, .09, .13);
+        const eyeR = new Ellipse2D(-.05, -.2, .09, .13);
+        const mouth = new Ellipse2D(-.14, -.02, .08, .1);
+
+        // Ghosts are see-through, so mix their color with white and make them a little transparent.
+        const c = this.getColor();
+        const color = new Color(
+            Math.trunc(c.r * .65 + 255 * .35),
+            Math.trunc(c.g * .65 + 255 * .35),
+            Math.trunc(c.b * .65 + 255 * .35),
+            235);
+        const tailColor = new Color(0, 0, 0, 60);
+
+
+        const flipped = g.create();
+        if (this.#dt < 50) {
+            flipped.scale(-1, 1);
+        }
+
+        if (this.player) {
+            flipped.setColor(Color.fromFloats(1,1,1,0.5));
+            flipped.fill(circle);
+        }
+
+        // draw shadow:
+        flipped.setColor(tailColor);
+        flipped.fill(shadow);
+
+        // Draw the ghost of size (1x1, roughly, at 0,0).
+        flipped.setColor(color);
+        flipped.fill(body);
+
+        flipped.setColor(Color.black);
+        flipped.fill(eyeL);
+        flipped.fill(eyeR);
+        flipped.fill(mouth);
+
+        flipped.dispose();
+    }
+
+    step() {
+        // Ghost are controlled at a higher level; see GhostGame.
+    }
+}
+
+// ===================== Maze movement helper =====================
+
+/**
+ * Move something one square through the maze, the way the bats and the
+ * computer ghosts do: pick a random open direction, but don't turn around
+ * unless it's a dead end. The object needs a "direction" field
+ * (0 = up, 1 = right, 2 = down, 3 = left).
+ * @return true if it moved.
+ */
+function wanderMaze(wo) {
+    const DX = [0, 1, 0, -1];
+    const DY = [-1, 0, 1, 0];
+    const x = wo.getX();
+    const y = wo.getY();
+
+    const open = [];
+    for (let d = 0; d < 4; d++) {
+        if (wo.world.canSwim(wo, x + DX[d], y + DY[d])) {
+            open.push(d);
+        }
+    }
+    if (open.length === 0) {
+        return false;
+    }
+    const reverse = (wo.direction + 2) % 4;
+    const forwardChoices = open.filter(d => d !== reverse);
+    const choices = forwardChoices.length > 0 ? forwardChoices : open;
+    wo.direction = choices[wo.rand.nextInt(choices.length)];
+
+    if (wo.direction === 0) {
+        return wo.moveUp();
+    } else if (wo.direction === 1) {
+        return wo.moveRight();
+    } else if (wo.direction === 2) {
+        return wo.moveDown();
+    } else {
+        return wo.moveLeft();
+    }
+}
+
+// ===================== Bat =====================
+
+/**
+ * Vampire bats flap around the maze drinking drops of blood. The player ghost
+ * must NOT touch any bat -- if the ghost bumps into one, the ghost loses!
+ */
+class Bat extends WorldObject {
+    /** This is the color of the bat's body and wings. */
+    bodyColor = new Color(165, 135, 185);
+    /** The bat's glowing red eyes. */
+    eyeColor = new Color(255, 40, 40);
+    /** Which way the bat is heading: 0 = up, 1 = right, 2 = down, 3 = left. */
+    direction = this.rand.nextInt(4);
+    /** The bat's wings flap up and down every step. */
+    wingsUp = true;
+    /** Seconds between the bat's steps (smaller = faster). Each bat gets a slightly different speed. */
+    stepTime = 0.17 + Math.random() * 0.1;
+    /** Time since this bat last moved. */
+    timer = 0;
+
+    constructor(world) {
+        super(world);
+    }
+
+    /**
+     * Draw a vampire bat: a faint red glow (so you can see the danger), flapping wings,
+     * pointy ears, glowing red eyes, and little white fangs.
+     * Like the other WorldObjects, it's drawn in a 1x1 box centered at (0,0).
+     */
+    draw(input) {
+        const g = input.create();
+
+        // Builds a shape from [x, y] points; mirror = true flips it to the right side.
+        const shape = (points, mirror) => {
+            const p = new Polygon();
+            for (const [x, y] of points) {
+                p.addPoint(mirror ? -x : x, y);
+            }
+            return p;
+        };
+        const wingUp = [[-.1, -.05], [-.25, -.3], [-.47, -.32], [-.4, -.12], [-.32, -.05], [-.22, .02], [-.1, .08]];
+        const wingDown = [[-.1, -.05], [-.28, -.05], [-.47, .12], [-.38, .18], [-.3, .25], [-.2, .22], [-.1, .1]];
+        const wing = this.wingsUp ? wingUp : wingDown;
+        const ear = [[-.1, -.1], [-.08, -.25], [-.02, -.12]];
+        const fang = [[-.045, .03], [-.015, .03], [-.03, .08]];
+
+        // Danger glow.
+        g.setColor(new Color(255, 0, 0, 85));
+        g.fill(new Ellipse2D(-.48, -.48, .96, .96));
+
+        g.setColor(this.bodyColor);
+        g.fill(shape(wing, false));
+        g.fill(shape(wing, true));
+        g.fill(shape(ear, false));
+        g.fill(shape(ear, true));
+        g.fill(new Ellipse2D(-.13, -.15, .26, .32));
+
+        g.setColor(this.eyeColor);
+        g.fill(new Ellipse2D(-.075, -.08, .055, .055));
+        g.fill(new Ellipse2D(.02, -.08, .055, .055));
+
+        g.setColor(Color.white);
+        g.fill(shape(fang, false));
+        g.fill(shape(fang, true));
+        g.dispose();
+    }
+
+    /** Take one step through the maze, then drink any blood drop here. */
+    step() {
+        wanderMaze(this);
+        this.wingsUp = !this.wingsUp;
+        for (const wo of this.findSameCell()) {
+            if (wo instanceof BloodDrop) {
+                wo.remove();
+            }
+        }
+    }
+}
+
+// ===================== Wall =====================
+
+/** A creepy purple maze wall. Nobody can move through it. */
+class Wall extends WorldObject {
+    constructor(world) {
+        super(world);
+    }
+    draw(g) {
+        g.setColor(new Color(120, 40, 175));
+        g.fill(new Rectangle2D(-.5, -.5, 1, 1));
+        g.setColor(new Color(45, 8, 65));
+        g.fill(new Rectangle2D(-.35, -.35, .7, .7));
+    }
+    step() {
+        // Walls don't move.
+    }
+}
+
+// ===================== PenFloor =====================
+
+/** The floor of the ghost pen. Ghosts can go here, but bats can't -- it's a safe spot. */
+class PenFloor extends WorldObject {
+    constructor(world) {
+        super(world);
+    }
+    draw(g) {
+        g.setColor(new Color(60, 20, 60));
+        g.fill(new Rectangle2D(-.5, -.5, 1, 1));
+    }
+    step() {
+        // The floor doesn't move.
+    }
+}
+
+// ===================== BloodDrop =====================
+
+/** A little red drop of blood for the bats to drink. Ghosts float right over them. */
+class BloodDrop extends WorldObject {
+    constructor(world) {
+        super(world);
+    }
+    draw(g) {
+        // A teardrop: a round bottom with a point on top.
+        const tip = new Polygon();
+        tip.addPoint(-.06, .0);
+        tip.addPoint(.06, .0);
+        tip.addPoint(0, -.14);
+        g.setColor(new Color(200, 0, 25));
+        g.fill(tip);
+        g.fill(new Ellipse2D(-.07, -.04, .14, .14));
+    }
+    step() {
+        // Blood drops just sit there until a bat drinks them.
+    }
+}
+
+// ===================== Exit =====================
+
+/** The way out of the maze! The player ghost wins by reaching it. */
+class Exit extends WorldObject {
+    constructor(world) {
+        super(world);
+    }
+    draw(g) {
+        // A glowing jack-o'-lantern orange door.
+        g.setColor(new Color(235, 115, 0));
+        g.fill(new RoundRectangle2D(-.45, -.45, .9, .9, .2, .2));
+        g.setColor(Color.white);
+        g.setFont("bold 0.28px sans-serif");
+        g.drawCenteredString("EXIT", 0, 0);
+    }
+    step() {
+        // The exit doesn't move.
+    }
+}
+
+// ===================== FallingRock =====================
+
+/**
+ * Rocks drop into the maze and fall straight down until something stops them.
+ * Once a rock lands it blocks the path like a wall -- so the maze keeps changing!
+ * After a while a landed rock crumbles away, so a path never stays blocked forever.
+ */
+class FallingRock extends WorldObject {
+    /** How many seconds a landed rock stays before it crumbles. */
+    static LIFE_TIME = 7;
+    /** Seconds between each square the rock falls. */
+    static FALL_TIME = 0.2;
+
+    landed = false;
+    /** How long the rock has been sitting since it landed. */
+    age = 0;
+    fallTimer = 0;
+    color = [new Color(150, 150, 160), new Color(130, 120, 110), new Color(110, 115, 125)][this.rand.nextInt(3)];
+
+    constructor(world) {
+        super(world);
+    }
+
+    /** Fall one square. If it can't, it has landed. */
+    step() {
+        if (!this.moveDown()) {
+            this.landed = true;
+        }
+    }
+
+    /** Has this rock been sitting long enough to crumble away? */
+    crumbled() {
+        return this.age > FallingRock.LIFE_TIME;
+    }
+
+    draw(g) {
+        // Fade out during the last second and a half before crumbling.
+        const fade = Math.max(0, Math.min(1, (FallingRock.LIFE_TIME - this.age) / 1.5));
+        const c = this.color;
+        g.setColor(new Color(c.r, c.g, c.b, Math.trunc(255 * fade)));
+        g.fill(new RoundRectangle2D(-.42, -.42, .84, .84, .3, .3));
+        // Cracks show up once the rock is getting old.
+        if (this.age > FallingRock.LIFE_TIME / 2) {
+            const crack = new Polygon();
+            crack.addPoint(-.2, -.3);
+            crack.addPoint(.02, -.02);
+            crack.addPoint(-.08, .05);
+            crack.addPoint(.15, .3);
+            crack.addPoint(-.12, .04);
+            crack.addPoint(-.02, -.02);
+            g.setColor(new Color(40, 40, 40, Math.trunc(255 * fade)));
+            g.fill(crack);
+        }
+    }
+}
+
+// ===================== World =====================
+
+/**
+ * A World is a 2d grid (the maze), represented as a width, a height, and a list of WorldObjects in it.
+ */
+class World {
+    #width;
+    #height;
+    #items = [];
+
+    constructor(w, h) {
+        this.#width = w;
+        this.#height = h;
+    }
+
+    /** Everything at (x, y). */
+    find(x, y) {
+        const found = [];
+        for (const w of this.#items) {
+            if (x == w.getX() && y == w.getY()) {
+                found.push(w);
+            }
+        }
+        return found;
+    }
+
+    /** A read-only copy of everything in the world (used for drawing). */
+    viewItems() {
+        return Object.freeze([...this.#items]);
+    }
+
+    register(item) {
+        this.#items.push(item);
+    }
+
+    remove(item) {
+        const index = this.#items.indexOf(item);
+        if (index !== -1) {
+            this.#items.splice(index, 1);
+        }
+    }
+
+    getWidth() {
+        return this.#width;
+    }
+    getHeight() {
+        return this.#height;
+    }
+
+    /** Put an object at (x, y) and add it to the world. */
+    place(item, x, y) {
+        item.setPosition(x, y);
+        this.register(item);
+        return item;
+    }
+
+    /**
+     * Can this object move to (x, y)?
+     * - Nobody goes through walls or off the board.
+     * - Only the player ghost can go into the exit.
+     * - Bats can't go into the ghost pen.
+     * - Ghosts can't move onto other ghosts (the computer ghosts get in your way!).
+     * - Bats and the player ghost CAN move onto each other -- that's how you lose!
+     * - Bats and computer ghosts pass right through each other.
+     * - Rocks block everyone. A falling rock stops when it hits anything solid
+     *   (it won't fall onto a ghost, a bat, the pen, or the exit).
+     */
+    canSwim(whoIsAsking, x, y) {
+        if (x < 0 || x >= this.#width || y < 0 || y >= this.#height) {
+            return false;
+        }
+        const isPlayer = whoIsAsking.isPlayer();
+        const isRock = whoIsAsking instanceof FallingRock;
+        for (const it of this.find(x, y)) {
+            if (it instanceof Wall || it instanceof FallingRock) {
+                return false;
+            }
+            if (isRock && (it instanceof Ghost || it instanceof Bat || it instanceof PenFloor)) {
+                return false;
+            }
+            if (it instanceof Exit && !isPlayer) {
+                return false;
+            }
+            if (it instanceof PenFloor && whoIsAsking instanceof Bat) {
+                return false;
+            }
+            if (it instanceof Ghost && whoIsAsking instanceof Ghost) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+// ===================== GhostEscapeGame =====================
+
+/**
+ * The game rules for Ghost Escape:
+ * - You are the red ghost. Get out of the haunted maze through the EXIT to win.
+ * - Fast vampire bats flap around drinking drops of blood. If you touch one, you lose!
+ * - Other ghosts wander around and get in your way.
+ * - The ghost pen is safe: bats can't go in.
+ * - Rocks keep falling into the maze and block paths until they crumble, so the maze keeps changing.
+ * - If the bats drink ALL the blood before you get out, you lose!
+ * - If you run into another ghost, they stop you for some boring small talk, and you're
+ *   frozen for a few seconds even though you're very busy escaping. The bats keep moving!
+ */
+class GhostEscapeGame {
+    /**
+     * The maze. # = wall, . = blood drop, (space) = empty floor, h = ghost pen floor,
+     * G = where you start, g = a computer ghost, E = the exit.
+     * (The vampire bats are placed randomly -- see MIN_BATS and MAX_BATS.)
+     */
+    static MAZE = [
+        "###################",
+        "#........#........#",
+        "#.##.###.#.###.##.#",
+        "#........g........#",
+        "#.##.#.#####.#.##.#",
+        "#....#...#...#....#",
+        "####.### # ###.####",
+        "####.#hhhGhhh#.####",
+        "####.# ##### #.####",
+        "#...g.........g...#",
+        "#.##.###.#.###.g.#",
+        "#..#.....g.....#..#",
+        "##.#.#.#####.###.##",
+        "#....#...#...#....#",
+        "#.####g#.#.#.#####.#",
+        "#.................#",
+        "#########E#########"
+    ];
+
+    /** Seconds before the bats start moving, so you can get ready. */
+    static READY_TIME = 1.5;
+    /** The fewest and the most bats a game can have (picked at random each game). */
+    static MIN_BATS = 5;
+    static MAX_BATS = 9;
+    /** Seconds between the computer ghosts' steps. */
+    static GHOST_STEP_TIME = 0.4;
+    /** A new rock drops into the maze this often (seconds). */
+    static ROCK_DROP_TIME = 0.75;
+    /** The most rocks allowed in the maze at once. */
+    static MAX_ROCKS = 9;
+    /** How long (seconds) a friend keeps you stuck in small talk. */
+    static CHAT_TIME = 3;
+    /** After a chat, how long (seconds) before another ghost can stop you again. */
+    static CHAT_COOLDOWN = 3;
+
+    /** Boring things your ghost friends love to talk about. */
+    static FRIEND_LINES = [
+        "So... how about this weather?",
+        "Did you see my new chains? So shiny.",
+        "Long time no see! How's the haunting?",
+        "Have you tried the graveyard cafe?",
+        "Let me tell you about my cousin...",
+        "Is this maze getting smaller?",
+        "Ooh, I had the WEIRDEST dream...",
+        "Remember the 1800s? Good times.",
+        "All the information is on the task",
+        "Poppadoms or bread?"
+    ];
+    /** What you say while trying to get away. */
+    static PLAYER_LINES = [
+        "Uh huh... I really gotta go.",
+        "Cool, cool... gotta run!",
+        "Haha yeah... anyway...",
+        "Mm-hmm... (please stop)",
+        "Totally. Okay, bye!",
+        "Wow. Neat. I'm kind of busy...",
+        "Uh....", 
+        "Goodbye!",
+        "I'm busy",
+    ];
+
+    world;
+    player;
+    exit;
+    bats = [];
+    ghosts = [];
+    rocks = [];
+    rockTimer = 0;
+    moves = 0;
+    elapsed = 0;
+    ghostTimer = 0;
+    won = false;
+    lost = false;
+    /** Why the player lost: "bat" (touched a bat) or "blood" (the bats drank all the blood). */
+    lostReason = "";
+
+    /** The ghost friend you're stuck talking to (or null if you're free). */
+    chatFriend = null;
+    /** Seconds of small talk left. */
+    chatTimer = 0;
+    /** Seconds until another ghost can stop you to chat. */
+    chatCooldown = 0;
+    /** What the friend and the player are saying right now. */
+    friendLine = "";
+    playerLine = "";
+
+    constructor() {
+        const maze = GhostEscapeGame.MAZE;
+        this.world = new World(maze[0].length, maze.length);
+        let colorIndex = 1;
+
+        for (let y = 0; y < maze.length; y++) {
+            for (let x = 0; x < maze[y].length; x++) {
+                const ch = maze[y][x];
+                if (ch === "#") {
+                    this.world.place(new Wall(this.world), x, y);
+                } else if (ch === ".") {
+                    this.world.place(new BloodDrop(this.world), x, y);
+                } else if (ch === "h" || ch === "G") {
+                    this.world.place(new PenFloor(this.world), x, y);
+                } else if (ch === "E") {
+                    this.exit = this.world.place(new Exit(this.world), x, y);
+                } else if (ch === "P") {
+                    this.bats.push(this.world.place(new Bat(this.world), x, y));
+                } else if (ch === "g") {
+                    const ghost = new Ghost(colorIndex, this.world);
+                    ghost.direction = ghost.rand.nextInt(4);
+                    colorIndex = colorIndex % (Ghost.COLORS.length - 1) + 1;
+                    this.ghosts.push(this.world.place(ghost, x, y));
+                }
+                if (ch === "G") {
+                    this.player = new Ghost(0, this.world);
+                    this.player.markAsPlayer();
+                    this.world.place(this.player, x, y);
+                }
+            }
+        }
+
+        // Pick a random number of bats (at least MIN_BATS, at most MAX_BATS)
+        // and put each one on a random open square that isn't too close to you.
+        const numBats = GhostEscapeGame.MIN_BATS +
+            this.player.rand.nextInt(GhostEscapeGame.MAX_BATS - GhostEscapeGame.MIN_BATS + 1);
+        while (this.bats.length < numBats) {
+            const x = this.player.rand.nextInt(this.world.getWidth());
+            const y = this.player.rand.nextInt(this.world.getHeight());
+            const here = this.world.find(x, y);
+            const distance = Math.abs(x - this.player.getX()) + Math.abs(y - this.player.getY());
+            if (distance >= 6 && here.every(wo => wo instanceof BloodDrop)) {
+                this.bats.push(this.world.place(new Bat(this.world), x, y));
+            }
+        }
+    }
+
+    /** How many blood drops the bats haven't drunk yet. */
+    bloodLeft() {
+        return this.world.viewItems().filter(wo => wo instanceof BloodDrop).length;
+    }
+
+    /** Is the game still in the "get ready" countdown? */
+    gettingReady() {
+        return this.elapsed < GhostEscapeGame.READY_TIME;
+    }
+
+    /** Is the player ghost touching any bat? */
+    #touchingBat() {
+        return this.bats.some(bat => this.player.inSameSpot(bat));
+    }
+
+    /**
+     * Move the player ghost one square.
+     * @param direction 0 = up, 1 = right, 2 = down, 3 = left.
+     */
+    movePlayer(direction) {
+        if (this.won || this.lost || this.isChatting()) {
+            // Can't move while you're stuck in small talk!
+            return;
+        }
+        // Trying to push past another ghost? They stop you to chat.
+        const DX = [0, 1, 0, -1];
+        const DY = [-1, 0, 1, 0];
+        const tx = this.player.getX() + DX[direction];
+        const ty = this.player.getY() + DY[direction];
+        const friendThere = this.ghosts.find(gh => gh.getX() === tx && gh.getY() === ty);
+        if (friendThere && this.chatCooldown <= 0) {
+            this.#startChat(friendThere);
+            return;
+        }
+        const moves = [() => this.player.moveUp(), () => this.player.moveRight(),
+            () => this.player.moveDown(), () => this.player.moveLeft()];
+        if (!moves[direction]()) {
+            return;
+        }
+        this.moves += 1;
+        if (this.#touchingBat()) {
+            this.lost = true;
+            this.lostReason = "bat";
+        } else if (this.player.inSameSpot(this.exit)) {
+            this.won = true;
+        } else {
+            this.#checkForFriends();
+        }
+    }
+
+    /** Are you stuck talking to a friend right now? */
+    isChatting() {
+        return this.chatFriend !== null;
+    }
+
+    /** Is this ghost right next to the player (up, down, left, or right)? */
+    #nextToPlayer(ghost) {
+        const dx = Math.abs(ghost.getX() - this.player.getX());
+        const dy = Math.abs(ghost.getY() - this.player.getY());
+        return dx + dy <= 1;
+    }
+
+    /** If a friend is right next to you (and you haven't just chatted), they start talking. */
+    #checkForFriends() {
+        if (this.isChatting() || this.chatCooldown > 0) {
+            return;
+        }
+        const friend = this.ghosts.find(gh => this.#nextToPlayer(gh));
+        if (friend) {
+            this.#startChat(friend);
+        }
+    }
+
+    /** Begin some very boring small talk. */
+    #startChat(friend) {
+        const pick = (lines) => lines[this.player.rand.nextInt(lines.length)];
+        this.chatFriend = friend;
+        this.chatTimer = GhostEscapeGame.CHAT_TIME;
+        this.friendLine = pick(GhostEscapeGame.FRIEND_LINES);
+        this.playerLine = pick(GhostEscapeGame.PLAYER_LINES);
+    }
+
+    /** Is it the player's turn to talk? (The friend talks first, then you try to get away.) */
+    playerIsTalking() {
+        return this.isChatting() && this.chatTimer < GhostEscapeGame.CHAT_TIME / 2;
+    }
+
+    /**
+     * Run the game clock: move each bat and computer ghost when its timer is up.
+     * @param seconds how much time passed since the last update.
+     */
+    tick(seconds) {
+        if (this.won || this.lost) {
+            return;
+        }
+        this.elapsed += seconds;
+        if (this.gettingReady()) {
+            return;
+        }
+
+        for (const bat of this.bats) {
+            bat.timer += seconds;
+            while (bat.timer >= bat.stepTime) {
+                bat.timer -= bat.stepTime;
+                bat.step();
+                if (this.#touchingBat()) {
+                    this.lost = true;
+                    this.lostReason = "bat";
+                    return;
+                }
+            }
+        }
+
+        // Did the bats drink every last drop of blood before you escaped?
+        if (this.bloodLeft() === 0) {
+            this.lost = true;
+            this.lostReason = "blood";
+            return;
+        }
+
+        this.ghostTimer += seconds;
+        while (this.ghostTimer >= GhostEscapeGame.GHOST_STEP_TIME) {
+            this.ghostTimer -= GhostEscapeGame.GHOST_STEP_TIME;
+            for (const ghost of this.ghosts) {
+                // Your friend stays put while chatting with you.
+                if (ghost !== this.chatFriend) {
+                    wanderMaze(ghost);
+                }
+            }
+        }
+
+        // Small talk: count down the chat, then the cooldown.
+        if (this.isChatting()) {
+            this.chatTimer -= seconds;
+            if (this.chatTimer <= 0) {
+                this.chatFriend = null;
+                this.chatCooldown = GhostEscapeGame.CHAT_COOLDOWN;
+            }
+        } else {
+            this.chatCooldown -= seconds;
+            this.#checkForFriends();
+        }
+
+        this.#updateRocks(seconds);
+    }
+
+    /**
+     * Drop new rocks, make falling rocks fall, and crumble old landed rocks.
+     */
+    #updateRocks(seconds) {
+        this.rockTimer += seconds;
+        if (this.rockTimer >= GhostEscapeGame.ROCK_DROP_TIME) {
+            this.rockTimer = 0;
+            if (this.rocks.length < GhostEscapeGame.MAX_ROCKS) {
+                this.#dropRock();
+            }
+        }
+
+        for (const rock of [...this.rocks]) {
+            if (!rock.landed) {
+                rock.fallTimer += seconds;
+                while (!rock.landed && rock.fallTimer >= FallingRock.FALL_TIME) {
+                    rock.fallTimer -= FallingRock.FALL_TIME;
+                    rock.step();
+                }
+            } else {
+                rock.age += seconds;
+                if (rock.crumbled()) {
+                    rock.remove();
+                    this.rocks.splice(this.rocks.indexOf(rock), 1);
+                }
+            }
+        }
+    }
+
+    /**
+     * Drop a rock onto a random open square (one with nothing on it, or just a blood drop).
+     */
+    #dropRock() {
+        for (let tries = 0; tries < 50; tries++) {
+            const x = this.player.rand.nextInt(this.world.getWidth());
+            const y = this.player.rand.nextInt(this.world.getHeight());
+            const here = this.world.find(x, y);
+            if (here.every(wo => wo instanceof BloodDrop)) {
+                this.rocks.push(this.world.place(new FallingRock(this.world), x, y));
+                return;
+            }
+        }
+    }
+}
+
+// ===================== PlayGhostEscape =====================
+
+/**
+ * The graphical view of Ghost Escape.
+ */
+class PlayGhostEscape extends GFX {
+    /** How many pixels each maze square is (before the page shrinks it to fit). */
+    static TILE = 32;
+    /** The words appear in the top part of the screen. */
+    static TOP_PART = 50;
+    /** A border around the maze. */
+    static BORDER = 5;
+    /** While you hold an arrow key, the ghost moves one square this often (seconds). */
+    static PLAYER_STEP_TIME = 0.13;
+
+    game;
+    gameState = new TextBox("");
+    topRect;
+    /** How long (seconds) the "you lose" message has been showing. */
+    loseTimer = 0;
+    /** Time since the player last moved (for holding down a key). */
+    playerTimer = 0;
+
+    constructor() {
+        const cols = GhostEscapeGame.MAZE[0].length;
+        const rows = GhostEscapeGame.MAZE.length;
+        super(cols * PlayGhostEscape.TILE + PlayGhostEscape.BORDER * 2,
+            rows * PlayGhostEscape.TILE + PlayGhostEscape.BORDER * 2 + PlayGhostEscape.TOP_PART);
+        this.game = new GhostEscapeGame();
+        this.gameState.color = Color.WHITE;
+        this.gameState.setFont(TextBox.BOLD_FONT);
+        this.gameState.setFontSize(20);
+        this.topRect = new Rectangle2D(0, 0, this.getWidth(), PlayGhostEscape.TOP_PART);
+    }
+
+    draw(g) {
+        // Creepy dark purple background.
+        g.setColor(new Color(20, 4, 30));
+        g.fillRect(0, 0, this.getWidth(), this.getHeight());
+
+        this.gameState.centerInside(this.topRect);
+        this.gameState.draw(g);
+
+        g.translate(PlayGhostEscape.BORDER, PlayGhostEscape.BORDER + PlayGhostEscape.TOP_PART);
+        const t = PlayGhostEscape.TILE;
+
+        // Draw the maze first, then the exit, computer ghosts, bats, and you on top.
+        const order = (wo) =>
+            wo.isPlayer() ? 5 : wo instanceof Bat ? 4 : wo instanceof Ghost ? 3 :
+            wo instanceof FallingRock ? 2 : wo instanceof Exit ? 1 : 0;
+        const items = [...this.game.world.viewItems()].sort((a, b) => order(a) - order(b));
+        for (const wo of items) {
+            const forWo = g.create();
+            forWo.translate((wo.getX() + 0.5) * t, (wo.getY() + 0.5) * t);
+            forWo.scale(t, t);
+            wo.draw(forWo);
+            forWo.dispose();
+        }
+
+        // Speech bubbles during small talk: your friend talks first, then you try to escape.
+        const game = this.game;
+        if (game.isChatting()) {
+            const speaker = game.playerIsTalking() ? game.player : game.chatFriend;
+            const text = game.playerIsTalking() ? game.playerLine : game.friendLine;
+            this.#drawBubble(g, text, (speaker.getX() + 0.5) * t, speaker.getY() * t);
+        }
+    }
+
+    /**
+     * Draw a white speech bubble with text, pointing down at (x, y).
+     * The bubble is nudged sideways if needed so it stays on the board.
+     */
+    #drawBubble(g, text, x, y) {
+        const font = "bold 13px sans-serif";
+        g.ctx.font = font;
+        const w = g.ctx.measureText(text).width + 16;
+        const h = 24;
+        const boardW = GhostEscapeGame.MAZE[0].length * PlayGhostEscape.TILE;
+        const left = Math.max(0, Math.min(boardW - w, x - w / 2));
+        // Above the speaker, unless that would go off the top of the board.
+        const above = y - h - 8 >= 0;
+        const top = above ? y - h - 8 : y + PlayGhostEscape.TILE + 8;
+
+        const tail = new Polygon();
+        if (above) {
+            tail.addPoint(x - 6, top + h - 1);
+            tail.addPoint(x + 6, top + h - 1);
+            tail.addPoint(x, top + h + 8);
+        } else {
+            tail.addPoint(x - 6, top + 1);
+            tail.addPoint(x + 6, top + 1);
+            tail.addPoint(x, top - 8);
+        }
+
+        g.setColor(Color.white);
+        g.fill(new RoundRectangle2D(left, top, w, h, 12, 12));
+        g.fill(tail);
+        g.setColor(Color.black);
+        g.setFont(font);
+        g.drawCenteredString(text, left + w / 2, top + h / 2);
+    }
+
+    update(secondsSinceLastUpdate) {
+        const restart = () => {
+            this.game = new GhostEscapeGame();
+            this.loseTimer = 0;
+        };
+
+        if (this.game.won) {
+            this.gameState.setString("You escaped the maze in " + this.game.moves + " moves! Click to play again.");
+            if (this.processClick() != null) {
+                restart();
+            }
+            return;
+        }
+
+        if (this.game.lost) {
+            this.loseTimer += secondsSinceLastUpdate;
+            if (this.game.lostReason === "blood") {
+                this.gameState.setString("The bats drank all the blood! You lose... restarting!");
+            } else {
+                this.gameState.setString("You bumped into a vampire bat! You lose... restarting!");
+            }
+            if (this.loseTimer > 3 || this.processClick() != null) {
+                restart();
+            }
+            return;
+        }
+
+        if (this.game.gettingReady()) {
+            this.gameState.setString("Get ready... escape before the blood runs out!");
+        } else if (this.game.isChatting()) {
+            this.gameState.setString(
+                    "Stuck in small talk! Frozen for " + Math.max(0, this.game.chatTimer).toFixed(1) + "s...");
+        } else {
+            this.gameState.setString(
+                    "Escape before the blood runs out!  Blood: " + this.game.bloodLeft() +
+                    "  Moves: " + this.game.moves);
+        }
+        this.processClick(); // clicks don't do anything during play
+
+        // Which way does the player want to go? A fresh key press moves right away;
+        // holding a key keeps moving every PLAYER_STEP_TIME seconds.
+        const KEYS = [
+            [KeyEvent.VK_W, KeyEvent.VK_UP],
+            [KeyEvent.VK_D, KeyEvent.VK_RIGHT],
+            [KeyEvent.VK_S, KeyEvent.VK_DOWN],
+            [KeyEvent.VK_A, KeyEvent.VK_LEFT]
+        ];
+        this.playerTimer += secondsSinceLastUpdate;
+        let direction = -1;
+        for (let d = 0; d < 4; d++) {
+            if (this.processKey(KEYS[d][0]) || this.processKey(KEYS[d][1])) {
+                direction = d;
+            }
+        }
+        if (direction === -1 && this.playerTimer >= PlayGhostEscape.PLAYER_STEP_TIME) {
+            for (let d = 0; d < 4; d++) {
+                if (this.isKeyDown(KEYS[d][0]) || this.isKeyDown(KEYS[d][1])) {
+                    direction = d;
+                }
+            }
+        }
+        if (direction !== -1) {
+            this.game.movePlayer(direction);
+            this.playerTimer = 0;
+        }
+
+        // The bats and other ghosts keep moving on their own.
+        this.game.tick(secondsSinceLastUpdate);
+    }
+
+    /** Create and start the game! */
+    static main() {
+        const game = new PlayGhostEscape();
+        game.start();
+    }
+}
+
+// Start the game once the page has loaded.
+if (document.body) { PlayGhostEscape.main(); } else { window.addEventListener("DOMContentLoaded", () => PlayGhostEscape.main()); }
 </script>
 
 
